@@ -29,7 +29,8 @@ pub const SYSTEM_PROGRAM: &str = "11111111111111111111111111111111";
 
 /// PumpSwap `buy_exact_quote_in` instruction discriminator.
 /// Anchor discriminator for the buy_exact_quote_in method.
-pub const PUMPSWAP_BUY_DISC: [u8; 8] = [198, 46, 21, 82, 180, 217, 232, 112];
+// PumpPortal uses this discriminator (verified from decoded PumpPortal tx)
+pub const PUMPSWAP_BUY_DISC: [u8; 8] = [102, 6, 61, 18, 1, 218, 235, 234];
 
 /// PumpSwap `sell_exact_base_in` (sell) instruction discriminator.
 pub const PUMPSWAP_SELL_DISC: [u8; 8] = [51, 230, 133, 164, 1, 127, 131, 173];

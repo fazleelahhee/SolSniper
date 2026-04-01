@@ -41,11 +41,12 @@ pub fn build_buy_instruction(
     lamports: u64,
     min_base_amount_out: u64,
 ) -> Instruction {
-    // [8 disc] [8 quote_in] [8 min_base_out] — 24 bytes, matching real PumpSwap txs
-    let mut ix_data = Vec::with_capacity(24);
+    // [8 disc] [8 quote_in] [8 min_base_out] [1 track_volume] = 25 bytes
+    let mut ix_data = Vec::with_capacity(25);
     ix_data.extend_from_slice(&PUMPSWAP_BUY_DISC);
     ix_data.extend_from_slice(&lamports.to_le_bytes());
     ix_data.extend_from_slice(&min_base_amount_out.to_le_bytes());
+    ix_data.push(0x00); // track_volume = false
 
     // Account ordering from real PumpSwap tx (verified on-chain)
     let accounts = vec![
@@ -58,7 +59,13 @@ pub fn build_buy_instruction(
         AccountMeta::new(*user_quote_ata, false),                // 6: user_quote_token_account
         AccountMeta::new(*base_vault, false),                    // 7: pool_base_token_account
         AccountMeta::new(*quote_vault, false),                   // 8: pool_quote_token_account
-        AccountMeta::new(*protocol_fee_recipient, false),        // 9: protocol_fee_recipient
+        // [9] = protocol fee recipient WSOL ATA (NOT the wallet address!)
+        {
+            let fee_recipient_wsol_ata = derive_ata(
+                protocol_fee_recipient, quote_mint, spl_token_program,
+            );
+            AccountMeta::new(fee_recipient_wsol_ata, false)
+        },
         AccountMeta::new(*creator_vault_authority, false),       // 10: coin_creator_vault_authority
         AccountMeta::new_readonly(pubkey(TOKEN_2022_PROGRAM), false),  // 11: token_program_2022
         AccountMeta::new_readonly(*spl_token_program, false),    // 12: token_program
@@ -66,18 +73,14 @@ pub fn build_buy_instruction(
         AccountMeta::new_readonly(*assoc_token_prog, false),     // 14: associated_token_program
         AccountMeta::new_readonly(*event_authority, false),      // 15: event_authority
         AccountMeta::new_readonly(*pumpswap_program, false),     // 16: program (self-reference)
-        AccountMeta::new(*coin_creator, false),                  // 17: coin_creator (writable for creator fees)
+        AccountMeta::new(*coin_creator, false),                  // 17: coin_creator
         AccountMeta::new(*creator_vault_ata, false),             // 18: creator_vault_ata
-        // Fee recipient WSOL ATA
-        {
-            let fee_recipient_wsol_ata = derive_ata(
-                protocol_fee_recipient, quote_mint, spl_token_program,
-            );
-            AccountMeta::new(fee_recipient_wsol_ata, false)
-        },
-        // Fee config + program
-        AccountMeta::new_readonly(pubkey("5PHirr8joyTMp9JMm6nW7hNDVyEYdkzDqazxPD7RaTjx"), false),
-        AccountMeta::new_readonly(pubkey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ"), false),
+        // Volume + fee accounts (19-23)
+        AccountMeta::new(Pubkey::find_program_address(&[b"global_volume_accumulator"], pumpswap_program).0, false),
+        AccountMeta::new(Pubkey::find_program_address(&[b"user_volume_accumulator", user.as_ref()], pumpswap_program).0, false),
+        AccountMeta::new_readonly(pubkey("5PHirr8joyTMp9JMm6nW7hNDVyEYdkzDqazxPD7RaTjx"), false), // fee_config
+        AccountMeta::new_readonly(pubkey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ"), false), // fee_program
+        AccountMeta::new(Pubkey::find_program_address(&[b"pool_volume_accumulator", pool.as_ref()], pumpswap_program).0, false),
         // Volume tracking accounts (writable — program will init if needed)
         AccountMeta::new(Pubkey::find_program_address(&[b"global_volume_accumulator"], pumpswap_program).0, false),
         AccountMeta::new(Pubkey::find_program_address(&[b"user_volume_accumulator", user.as_ref()], pumpswap_program).0, false),
