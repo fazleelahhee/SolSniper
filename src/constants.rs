@@ -10,7 +10,7 @@ pub const PUMPSWAP_PROGRAM: &str = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA"
 pub const PUMP_PROGRAM: &str = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 
 /// PumpSwap GlobalConfig account (stores protocol_fee_recipient).
-pub const PUMPSWAP_GLOBAL_CONFIG: &str = "ADyA8hBd1ckwkgdC5fC4bKBS32sNeuHuJecF8GWqV7Zb";
+pub const PUMPSWAP_GLOBAL_CONFIG: &str = "ADyA8hdefvWN2dbGGWFotbzWxrAvLW83WG6QCVXvJKqw";
 
 /// Wrapped SOL mint address.
 pub const WSOL_MINT: &str = "So11111111111111111111111111111111111111112";
@@ -35,7 +35,7 @@ pub const PUMPSWAP_BUY_DISC: [u8; 8] = [198, 46, 21, 82, 180, 217, 232, 112];
 pub const PUMPSWAP_SELL_DISC: [u8; 8] = [51, 230, 133, 164, 1, 127, 131, 173];
 
 /// Default protocol fee recipient (fallback if GlobalConfig read fails).
-pub const DEFAULT_PROTOCOL_FEE_RECIPIENT: &str = "CebN5WGQ4jvEPvsVU4EoHEpgzq1VV7AbicfhtW4xC9iM";
+pub const DEFAULT_PROTOCOL_FEE_RECIPIENT: &str = "FWsW1xNtWscwNmKv6wVsU1iTzRN6wmmk3MjxRP5tT7hz";
 
 /// Default compute unit limit for swap transactions.
 pub const DEFAULT_CU_LIMIT: u32 = 300_000;

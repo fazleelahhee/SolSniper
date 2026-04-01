@@ -85,11 +85,8 @@ pub async fn buy(
         instruction::derive_ata(&creator_vault_authority, &quote_mint_pk, &spl_token_program);
     let event_authority = instruction::derive_event_authority();
 
-    // Read protocol fee recipient from GlobalConfig
-    let protocol_fee_recipient =
-        rpc::read_protocol_fee_recipient(&http, rpc_url, &global_config)
-            .await
-            .unwrap_or_else(|_| pubkey(DEFAULT_PROTOCOL_FEE_RECIPIENT));
+    // Use known protocol fee recipient (skip slow GlobalConfig RPC read)
+    let protocol_fee_recipient = pubkey(DEFAULT_PROTOCOL_FEE_RECIPIENT);
 
     // Read vault balances to calculate min_base_amount_out
     let min_base_amount_out = match rpc::read_vault_balances(

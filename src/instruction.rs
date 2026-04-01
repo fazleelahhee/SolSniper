@@ -52,7 +52,7 @@ pub fn build_buy_instruction(
     let accounts = vec![
         AccountMeta::new(*pool, false),                          // 0: pool
         AccountMeta::new(*user, true),                           // 1: user (signer)
-        AccountMeta::new_readonly(*global_config, false),        // 2: global_config
+        AccountMeta::new_readonly(*global_config, false),        // 2: global_config (readonly in real tx)
         AccountMeta::new_readonly(*base_mint, false),            // 3: base_mint
         AccountMeta::new_readonly(*quote_mint, false),           // 4: quote_mint
         AccountMeta::new(*user_base_ata, false),                 // 5: user_base_token_account
@@ -67,8 +67,11 @@ pub fn build_buy_instruction(
         AccountMeta::new_readonly(*assoc_token_prog, false),     // 14: associated_token_program
         AccountMeta::new_readonly(*event_authority, false),      // 15: event_authority
         AccountMeta::new_readonly(*pumpswap_program, false),     // 16: program (self-reference)
-        AccountMeta::new_readonly(*coin_creator, false),         // 17: coin_creator
+        AccountMeta::new(*coin_creator, false),                  // 17: coin_creator (writable for creator fees)
         AccountMeta::new(*creator_vault_ata, false),             // 18: creator_vault_ata
+        // Fee accounts (required by PumpSwap)
+        AccountMeta::new_readonly(pubkey("5PHirr8joyTMp9JMm6nW7hNDVyEYdkzDqazxPD7RaTjx"), false), // 19: fee_config
+        AccountMeta::new_readonly(pubkey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ"), false), // 20: fee program
     ];
 
     Instruction {
@@ -115,7 +118,7 @@ pub fn build_sell_instruction(
     let accounts = vec![
         AccountMeta::new(*pool, false),                          // 0: pool
         AccountMeta::new(*user, true),                           // 1: user (signer)
-        AccountMeta::new_readonly(*global_config, false),        // 2: global_config
+        AccountMeta::new(*global_config, false),                 // 2: global_config (writable)
         AccountMeta::new_readonly(*base_mint, false),            // 3: base_mint
         AccountMeta::new_readonly(*quote_mint, false),           // 4: quote_mint
         AccountMeta::new(*user_base_ata, false),                 // 5: user_base_token_account
@@ -130,7 +133,7 @@ pub fn build_sell_instruction(
         AccountMeta::new_readonly(*assoc_token_prog, false),     // 14: associated_token_program
         AccountMeta::new_readonly(*event_authority, false),      // 15: event_authority
         AccountMeta::new_readonly(*pumpswap_program, false),     // 16: program (self-reference)
-        AccountMeta::new_readonly(*coin_creator, false),         // 17: coin_creator
+        AccountMeta::new(*coin_creator, false),                  // 17: coin_creator (writable)
         AccountMeta::new(*creator_vault_ata, false),             // 18: creator_vault_ata
     ];
 

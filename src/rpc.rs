@@ -185,15 +185,15 @@ pub async fn read_protocol_fee_recipient(
         .decode(account_data)
         .map_err(|e| SwapError::GlobalConfigRead(format!("Base64 decode failed: {e}")))?;
 
-    // GlobalConfig layout: discriminator (8) + admin (32) = offset 40 for protocol_fee_recipient
-    if bytes.len() < 72 {
+    // GlobalConfig layout: protocol_fee_recipient at offset 217 (verified on-chain)
+    if bytes.len() < 249 {
         return Err(SwapError::GlobalConfigRead(format!(
             "GlobalConfig too short: {} bytes",
             bytes.len()
         )));
     }
 
-    let fee_recipient_bytes: [u8; 32] = bytes[40..72]
+    let fee_recipient_bytes: [u8; 32] = bytes[217..249]
         .try_into()
         .map_err(|_| SwapError::GlobalConfigRead("Slice conversion failed".into()))?;
 
