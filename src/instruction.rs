@@ -48,10 +48,11 @@ pub fn build_buy_instruction(
     ix_data.extend_from_slice(&min_base_amount_out.to_le_bytes());
     ix_data.push(0x00); // track_volume = None
 
+    // Account ordering from real PumpSwap tx (verified on-chain)
     let accounts = vec![
-        AccountMeta::new_readonly(*global_config, false),       // 0: global_config
-        AccountMeta::new(*pool, false),                          // 1: pool
-        AccountMeta::new(*user, true),                           // 2: user (signer)
+        AccountMeta::new(*pool, false),                          // 0: pool
+        AccountMeta::new(*user, true),                           // 1: user (signer)
+        AccountMeta::new_readonly(*global_config, false),        // 2: global_config
         AccountMeta::new_readonly(*base_mint, false),            // 3: base_mint
         AccountMeta::new_readonly(*quote_mint, false),           // 4: quote_mint
         AccountMeta::new(*user_base_ata, false),                 // 5: user_base_token_account
@@ -60,14 +61,14 @@ pub fn build_buy_instruction(
         AccountMeta::new(*quote_vault, false),                   // 8: pool_quote_token_account
         AccountMeta::new(*protocol_fee_recipient, false),        // 9: protocol_fee_recipient
         AccountMeta::new(*creator_vault_authority, false),       // 10: coin_creator_vault_authority
-        AccountMeta::new(*creator_vault_ata, false),             // 11: coin_creator_vault_ata
+        AccountMeta::new_readonly(pubkey(TOKEN_2022_PROGRAM), false),  // 11: token_program_2022
         AccountMeta::new_readonly(*spl_token_program, false),    // 12: token_program
-        AccountMeta::new_readonly(*spl_token_program, false),    // 13: token_program_2 (same for non-2022)
-        AccountMeta::new_readonly(*system_prog, false),          // 14: system_program
-        AccountMeta::new_readonly(*assoc_token_prog, false),     // 15: associated_token_program
-        AccountMeta::new_readonly(*event_authority, false),      // 16: event_authority
-        AccountMeta::new_readonly(*pumpswap_program, false),     // 17: program (self-reference)
-        AccountMeta::new_readonly(*coin_creator, false),         // 18: coin_creator
+        AccountMeta::new_readonly(*system_prog, false),          // 13: system_program
+        AccountMeta::new_readonly(*assoc_token_prog, false),     // 14: associated_token_program
+        AccountMeta::new_readonly(*event_authority, false),      // 15: event_authority
+        AccountMeta::new_readonly(*pumpswap_program, false),     // 16: program (self-reference)
+        AccountMeta::new_readonly(*coin_creator, false),         // 17: coin_creator
+        AccountMeta::new(*creator_vault_ata, false),             // 18: creator_vault_ata
     ];
 
     Instruction {
@@ -110,26 +111,27 @@ pub fn build_sell_instruction(
     ix_data.extend_from_slice(&base_amount_in.to_le_bytes());
     ix_data.extend_from_slice(&min_quote_amount_out.to_le_bytes());
 
+    // Account ordering from real PumpSwap tx (same as buy)
     let accounts = vec![
-        AccountMeta::new_readonly(*global_config, false),
-        AccountMeta::new(*pool, false),
-        AccountMeta::new(*user, true),
-        AccountMeta::new_readonly(*base_mint, false),
-        AccountMeta::new_readonly(*quote_mint, false),
-        AccountMeta::new(*user_base_ata, false),
-        AccountMeta::new(*user_quote_ata, false),
-        AccountMeta::new(*base_vault, false),
-        AccountMeta::new(*quote_vault, false),
-        AccountMeta::new(*protocol_fee_recipient, false),
-        AccountMeta::new(*creator_vault_authority, false),
-        AccountMeta::new(*creator_vault_ata, false),
-        AccountMeta::new_readonly(*spl_token_program, false),
-        AccountMeta::new_readonly(*spl_token_program, false),
-        AccountMeta::new_readonly(*system_prog, false),
-        AccountMeta::new_readonly(*assoc_token_prog, false),
-        AccountMeta::new_readonly(*event_authority, false),
-        AccountMeta::new_readonly(*pumpswap_program, false),
-        AccountMeta::new_readonly(*coin_creator, false),
+        AccountMeta::new(*pool, false),                          // 0: pool
+        AccountMeta::new(*user, true),                           // 1: user (signer)
+        AccountMeta::new_readonly(*global_config, false),        // 2: global_config
+        AccountMeta::new_readonly(*base_mint, false),            // 3: base_mint
+        AccountMeta::new_readonly(*quote_mint, false),           // 4: quote_mint
+        AccountMeta::new(*user_base_ata, false),                 // 5: user_base_token_account
+        AccountMeta::new(*user_quote_ata, false),                // 6: user_quote_token_account
+        AccountMeta::new(*base_vault, false),                    // 7: pool_base_token_account
+        AccountMeta::new(*quote_vault, false),                   // 8: pool_quote_token_account
+        AccountMeta::new(*protocol_fee_recipient, false),        // 9: protocol_fee_recipient
+        AccountMeta::new(*creator_vault_authority, false),       // 10: coin_creator_vault_authority
+        AccountMeta::new_readonly(pubkey(TOKEN_2022_PROGRAM), false),  // 11: token_program_2022
+        AccountMeta::new_readonly(*spl_token_program, false),    // 12: token_program
+        AccountMeta::new_readonly(*system_prog, false),          // 13: system_program
+        AccountMeta::new_readonly(*assoc_token_prog, false),     // 14: associated_token_program
+        AccountMeta::new_readonly(*event_authority, false),      // 15: event_authority
+        AccountMeta::new_readonly(*pumpswap_program, false),     // 16: program (self-reference)
+        AccountMeta::new_readonly(*coin_creator, false),         // 17: coin_creator
+        AccountMeta::new(*creator_vault_ata, false),             // 18: creator_vault_ata
     ];
 
     Instruction {
@@ -237,10 +239,10 @@ pub fn derive_creator_vault_authority(coin_creator: &Pubkey) -> Pubkey {
 
 /// Derive event_authority PDA (under pump.fun program).
 pub fn derive_event_authority() -> Pubkey {
-    let pump_program = pubkey(PUMP_PROGRAM);
+    let pumpswap_program = pubkey(PUMPSWAP_PROGRAM);
     let (pda, _) = Pubkey::find_program_address(
         &[b"__event_authority"],
-        &pump_program,
+        &pumpswap_program,
     );
     pda
 }

@@ -74,8 +74,9 @@ pub async fn buy(
     let system_program = pubkey(SYSTEM_PROGRAM);
     let global_config = pubkey(PUMPSWAP_GLOBAL_CONFIG);
 
-    // Derive ATAs
-    let user_base_ata = instruction::derive_ata(&payer, &base_mint_pk, &spl_token_program);
+    // Derive ATAs — base token uses Token-2022 for pump.fun tokens
+    let token_2022 = pubkey(TOKEN_2022_PROGRAM);
+    let user_base_ata = instruction::derive_ata(&payer, &base_mint_pk, &token_2022);
     let user_quote_ata = instruction::derive_ata(&payer, &quote_mint_pk, &spl_token_program);
 
     // Derive PDAs
@@ -144,8 +145,8 @@ pub async fn buy(
         instruction::transfer_sol(&payer, &user_quote_ata, lamports),
         // SyncNative to wrap SOL
         instruction::sync_native(&user_quote_ata, &spl_token_program),
-        // Create base token ATA (idempotent)
-        instruction::create_ata_idempotent(&payer, &payer, &base_mint_pk, &spl_token_program),
+        // Create base token ATA (idempotent) — use Token-2022 for pump.fun tokens
+        instruction::create_ata_idempotent(&payer, &payer, &base_mint_pk, &pubkey(TOKEN_2022_PROGRAM)),
         // PumpSwap swap
         swap_ix,
         // Close WSOL ATA to unwrap remaining SOL
@@ -224,8 +225,9 @@ pub async fn sell(
     let system_program = pubkey(SYSTEM_PROGRAM);
     let global_config = pubkey(PUMPSWAP_GLOBAL_CONFIG);
 
-    // Derive ATAs
-    let user_base_ata = instruction::derive_ata(&payer, &base_mint_pk, &spl_token_program);
+    // Derive ATAs — base token uses Token-2022 for pump.fun tokens
+    let token_2022 = pubkey(TOKEN_2022_PROGRAM);
+    let user_base_ata = instruction::derive_ata(&payer, &base_mint_pk, &token_2022);
     let user_quote_ata = instruction::derive_ata(&payer, &quote_mint_pk, &spl_token_program);
 
     // Derive PDAs
