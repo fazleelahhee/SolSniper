@@ -11,6 +11,7 @@ pub mod constants;
 pub mod error;
 pub mod instruction;
 pub mod pool;
+pub mod pumpportal;
 pub mod swap;
 pub mod rpc;
 

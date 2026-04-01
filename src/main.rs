@@ -109,6 +109,29 @@ enum Commands {
         /// Token mint address
         mint: String,
     },
+
+    /// Fast buy via PumpPortal (correct accounts, our RPC)
+    FastBuy {
+        /// Token mint address
+        mint: String,
+        /// SOL amount to spend
+        sol_amount: f64,
+        /// Slippage tolerance in percent
+        #[arg(long, default_value = "10.0")]
+        slippage: f64,
+    },
+
+    /// Fast sell via PumpPortal (correct accounts, our RPC)
+    FastSell {
+        /// Token mint address
+        mint: String,
+        /// Amount to sell ("100%" for all)
+        #[arg(default_value = "100%")]
+        amount: String,
+        /// Slippage tolerance
+        #[arg(long, default_value = "10.0")]
+        slippage: f64,
+    },
 }
 
 fn load_keypair(wallet_path: &str) -> anyhow::Result<Keypair> {
@@ -321,6 +344,45 @@ async fn main() -> anyhow::Result<()> {
                 "base_mint": pool.base_mint,
                 "price_sol": pool.price_sol,
                 "quote_sol_in_pool": pool.quote_sol_in_pool,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+
+        Commands::FastBuy { mint, sol_amount, slippage } => {
+            let wp = wallet_path.as_ref().ok_or_else(|| anyhow::anyhow!("Wallet path required"))?;
+            let keypair = load_keypair(&wp)?;
+            println!("Wallet: {}", keypair.pubkey());
+            println!("FAST BUY: {} SOL of {} (slippage {}%)", sol_amount, &mint[..12.min(mint.len())], slippage);
+
+            let (sig, _tokens) = solsniper::pumpportal::buy(
+                &rpc_url, &keypair, &mint, sol_amount, slippage, None,
+            ).await?;
+
+            let output = serde_json::json!({
+                "action": "fast_buy",
+                "mint": mint,
+                "sol_amount": sol_amount,
+                "signature": sig.to_string(),
+                "success": true,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+
+        Commands::FastSell { mint, amount, slippage } => {
+            let wp = wallet_path.as_ref().ok_or_else(|| anyhow::anyhow!("Wallet path required"))?;
+            let keypair = load_keypair(&wp)?;
+            println!("Wallet: {}", keypair.pubkey());
+            println!("FAST SELL: {} of {} (slippage {}%)", amount, &mint[..12.min(mint.len())], slippage);
+
+            let sig = solsniper::pumpportal::sell(
+                &rpc_url, &keypair, &mint, &amount, slippage, None,
+            ).await?;
+
+            let output = serde_json::json!({
+                "action": "fast_sell",
+                "mint": mint,
+                "signature": sig.to_string(),
+                "success": true,
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
