@@ -41,12 +41,11 @@ pub fn build_buy_instruction(
     lamports: u64,
     min_base_amount_out: u64,
 ) -> Instruction {
-    // [8 bytes disc] [8 bytes spendable_quote_in] [8 bytes min_base_amount_out] [1 byte track_volume]
-    let mut ix_data = Vec::with_capacity(25);
+    // [8 disc] [8 quote_in] [8 min_base_out] — 24 bytes, matching real PumpSwap txs
+    let mut ix_data = Vec::with_capacity(24);
     ix_data.extend_from_slice(&PUMPSWAP_BUY_DISC);
     ix_data.extend_from_slice(&lamports.to_le_bytes());
     ix_data.extend_from_slice(&min_base_amount_out.to_le_bytes());
-    ix_data.push(0x00); // track_volume = None
 
     // Account ordering from real PumpSwap tx (verified on-chain)
     let accounts = vec![
@@ -69,9 +68,20 @@ pub fn build_buy_instruction(
         AccountMeta::new_readonly(*pumpswap_program, false),     // 16: program (self-reference)
         AccountMeta::new(*coin_creator, false),                  // 17: coin_creator (writable for creator fees)
         AccountMeta::new(*creator_vault_ata, false),             // 18: creator_vault_ata
-        // Fee accounts (required by PumpSwap)
-        AccountMeta::new_readonly(pubkey("5PHirr8joyTMp9JMm6nW7hNDVyEYdkzDqazxPD7RaTjx"), false), // 19: fee_config
-        AccountMeta::new_readonly(pubkey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ"), false), // 20: fee program
+        // Fee recipient WSOL ATA
+        {
+            let fee_recipient_wsol_ata = derive_ata(
+                protocol_fee_recipient, quote_mint, spl_token_program,
+            );
+            AccountMeta::new(fee_recipient_wsol_ata, false)
+        },
+        // Fee config + program
+        AccountMeta::new_readonly(pubkey("5PHirr8joyTMp9JMm6nW7hNDVyEYdkzDqazxPD7RaTjx"), false),
+        AccountMeta::new_readonly(pubkey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ"), false),
+        // Volume tracking accounts (writable — program will init if needed)
+        AccountMeta::new(Pubkey::find_program_address(&[b"global_volume_accumulator"], pumpswap_program).0, false),
+        AccountMeta::new(Pubkey::find_program_address(&[b"user_volume_accumulator", user.as_ref()], pumpswap_program).0, false),
+        AccountMeta::new(Pubkey::find_program_address(&[b"pool_volume_accumulator", pool.as_ref()], pumpswap_program).0, false),
     ];
 
     Instruction {
