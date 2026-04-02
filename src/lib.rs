@@ -18,3 +18,13 @@ pub mod rpc;
 pub use error::SwapError;
 pub use pool::PoolInfo;
 pub use swap::{buy, sell, sell_all};
+
+/// Create a shared HTTP client with connection pooling for maximum speed.
+/// Reuse this client across all buy/sell/price calls.
+pub fn create_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .pool_max_idle_per_host(5)
+        .tcp_keepalive(Some(std::time::Duration::from_secs(30)))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}

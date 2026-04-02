@@ -8,9 +8,132 @@ use solana_sdk::{
     signature::Signature,
     transaction::VersionedTransaction,
 };
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 
 use crate::error::SwapError;
+
+#[derive(Debug)]
+struct RpcSendOutcome {
+    rpc_url: String,
+    result: Result<Signature, String>,
+}
+
+fn broadcast_rpc_urls(primary_rpc_url: &str) -> Vec<String> {
+    let mut urls = vec![primary_rpc_url.to_string()];
+
+    if let Ok(extra) = std::env::var("SOLSNIPER_BROADCAST_RPCS") {
+        for rpc in extra.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            if !urls.iter().any(|existing| existing == rpc) {
+                urls.push(rpc.to_string());
+            }
+        }
+    }
+
+    urls
+}
+
+fn is_duplicate_or_already_processed(error: &str) -> bool {
+    let lowered = error.to_ascii_lowercase();
+    lowered.contains("already processed")
+        || lowered.contains("already been processed")
+        || lowered.contains("duplicate")
+}
+
+async fn send_transaction_to_rpc(
+    http: reqwest::Client,
+    rpc_url: String,
+    tx_base64: String,
+    expected_signature: Signature,
+) -> RpcSendOutcome {
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "sendTransaction",
+        "params": [
+            tx_base64,
+            {
+                "encoding": "base64",
+                "skipPreflight": true,
+                "maxRetries": 0
+            }
+        ]
+    });
+
+    let result = async {
+        let resp = http
+            .post(&rpc_url)
+            .json(&body)
+            .timeout(Duration::from_secs(3))
+            .send()
+            .await
+            .map_err(|e| format!("HTTP send failed: {e}"))?;
+
+        let data: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse sendTransaction response: {e}"))?;
+
+        if let Some(err) = data.get("error") {
+            let err_str = err.to_string();
+            if is_duplicate_or_already_processed(&err_str) {
+                return Ok(expected_signature);
+            }
+            return Err(format!("sendTransaction error: {err_str}"));
+        }
+
+        let sig_str = data["result"]
+            .as_str()
+            .ok_or_else(|| "No signature in sendTransaction response".to_string())?;
+
+        let sig =
+            Signature::from_str(sig_str).map_err(|e| format!("Bad signature from RPC: {e}"))?;
+
+        if sig != expected_signature {
+            return Err(format!(
+                "RPC returned unexpected signature {sig}, expected {expected_signature}"
+            ));
+        }
+
+        Ok(sig)
+    }
+    .await;
+
+    RpcSendOutcome { rpc_url, result }
+}
+
+async fn get_signature_status_from_rpc(
+    http: reqwest::Client,
+    rpc_url: String,
+    signature: Signature,
+) -> Result<Option<serde_json::Value>, String> {
+    let body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getSignatureStatuses",
+        "params": [[signature.to_string()]]
+    });
+
+    let resp = http
+        .post(&rpc_url)
+        .json(&body)
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await
+        .map_err(|e| format!("{rpc_url} => HTTP send failed: {e}"))?;
+
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("{rpc_url} => Failed to parse getSignatureStatuses response: {e}"))?;
+
+    let maybe_status = data["result"]["value"]
+        .as_array()
+        .and_then(|statuses| statuses.first())
+        .filter(|status| !status.is_null())
+        .cloned();
+
+    Ok(maybe_status)
+}
 
 /// Send a signed VersionedTransaction via RPC with `skipPreflight` and `maxRetries`.
 /// Returns the transaction signature.
@@ -22,42 +145,41 @@ pub async fn send_transaction(
     let tx_bytes =
         bincode::serialize(signed_tx).map_err(|e| SwapError::Deserialize(e.to_string()))?;
     let tx_base64 = base64::engine::general_purpose::STANDARD.encode(&tx_bytes);
+    let expected_signature = signed_tx
+        .signatures
+        .first()
+        .copied()
+        .ok_or_else(|| SwapError::SigningFailed("Signed transaction has no signatures".into()))?;
+    let rpc_urls = broadcast_rpc_urls(rpc_url);
 
-    let body = json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "sendTransaction",
-        "params": [
-            tx_base64,
-            {
-                "encoding": "base64",
-                "skipPreflight": true,
-                "maxRetries": 3
-            }
-        ]
-    });
-
-    let resp = http
-        .post(rpc_url)
-        .json(&body)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await?;
-
-    let data: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| SwapError::Rpc(format!("Failed to parse sendTransaction response: {e}")))?;
-
-    if let Some(err) = data.get("error") {
-        return Err(SwapError::Rpc(format!("sendTransaction error: {err}")));
+    let mut join_set = tokio::task::JoinSet::new();
+    for rpc in rpc_urls.iter().cloned() {
+        join_set.spawn(send_transaction_to_rpc(
+            http.clone(),
+            rpc,
+            tx_base64.clone(),
+            expected_signature,
+        ));
     }
 
-    let sig_str = data["result"]
-        .as_str()
-        .ok_or_else(|| SwapError::Rpc("No signature in sendTransaction response".into()))?;
+    let mut failures = Vec::new();
+    while let Some(joined) = join_set.join_next().await {
+        match joined {
+            Ok(RpcSendOutcome {
+                result: Ok(signature), ..
+            }) => return Ok(signature),
+            Ok(RpcSendOutcome {
+                rpc_url,
+                result: Err(err),
+            }) => failures.push(format!("{rpc_url} => {err}")),
+            Err(err) => failures.push(format!("tokio task join error => {err}")),
+        }
+    }
 
-    Signature::from_str(sig_str).map_err(|e| SwapError::Rpc(format!("Bad signature: {e}")))
+    Err(SwapError::Rpc(format!(
+        "all RPC broadcasts failed for {expected_signature}: {}",
+        failures.join(" | ")
+    )))
 }
 
 /// Confirm a transaction by polling signature status.
@@ -68,53 +190,42 @@ pub async fn confirm_transaction(
     signature: &Signature,
     timeout_secs: u64,
 ) -> Result<(), SwapError> {
+    let rpc_urls = broadcast_rpc_urls(rpc_url);
+
     for i in 0..timeout_secs {
         if i > 0 {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
 
-        let body = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "getSignatureStatuses",
-            "params": [[signature.to_string()]]
-        });
+        let mut join_set = tokio::task::JoinSet::new();
+        for rpc in rpc_urls.iter().cloned() {
+            join_set.spawn(get_signature_status_from_rpc(
+                http.clone(),
+                rpc,
+                *signature,
+            ));
+        }
 
-        let resp = http
-            .post(rpc_url)
-            .json(&body)
-            .timeout(std::time::Duration::from_secs(5))
-            .send()
-            .await;
+        while let Some(joined) = join_set.join_next().await {
+            let maybe_status = match joined {
+                Ok(Ok(status)) => status,
+                _ => continue,
+            };
 
-        let data: serde_json::Value = match resp {
-            Ok(r) => match r.json().await {
-                Ok(d) => d,
-                Err(_) => continue,
-            },
-            Err(_) => continue,
-        };
+            let Some(status) = maybe_status else {
+                continue;
+            };
 
-        if let Some(statuses) = data["result"]["value"].as_array() {
-            if let Some(Some(status)) = statuses.first().map(|s| {
-                if s.is_null() {
-                    None
-                } else {
-                    Some(s)
-                }
-            }) {
-                // Check for on-chain error
-                if status.get("err").is_some() && !status["err"].is_null() {
-                    return Err(SwapError::TransactionFailed(format!(
-                        "On-chain error: {}",
-                        status["err"]
-                    )));
-                }
+            if status.get("err").is_some() && !status["err"].is_null() {
+                return Err(SwapError::TransactionFailed(format!(
+                    "On-chain error: {}",
+                    status["err"]
+                )));
+            }
 
-                let conf_status = status["confirmationStatus"].as_str().unwrap_or("");
-                if conf_status == "confirmed" || conf_status == "finalized" {
-                    return Ok(());
-                }
+            let conf_status = status["confirmationStatus"].as_str().unwrap_or("");
+            if conf_status == "confirmed" || conf_status == "finalized" {
+                return Ok(());
             }
         }
     }

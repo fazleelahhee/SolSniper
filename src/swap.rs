@@ -32,20 +32,9 @@ pub struct SwapResult {
 ///
 /// Wraps SOL into WSOL, swaps for base tokens via the PumpSwap AMM,
 /// then unwraps any remaining WSOL.
-///
-/// # Arguments
-/// * `rpc_url` - Solana RPC endpoint (Alchemy, Helius, etc.)
-/// * `pool_address` - PumpSwap pool account address
-/// * `base_vault` - Pool's base token vault address
-/// * `quote_vault` - Pool's quote (SOL) vault address
-/// * `coin_creator` - Token creator address (for fee routing)
-/// * `amount_sol` - Amount of SOL to spend (e.g. 0.005 for $0.50)
-/// * `slippage_pct` - Slippage tolerance as percentage (e.g. 3.0 for 3%)
-/// * `keypair` - Wallet keypair for signing
-/// * `base_mint` - Token mint address
-/// * `cu_price` - Compute unit price (priority fee in micro-lamports, None for default)
 #[allow(clippy::too_many_arguments)]
 pub async fn buy(
+    http: &reqwest::Client,
     rpc_url: &str,
     pool_address: &str,
     base_vault: &str,
@@ -57,7 +46,6 @@ pub async fn buy(
     base_mint: &str,
     cu_price: Option<u64>,
 ) -> Result<SwapResult, SwapError> {
-    let http = reqwest::Client::new();
     let payer = keypair.pubkey();
     let lamports = (amount_sol * 1e9) as u64;
 
@@ -88,23 +76,22 @@ pub async fn buy(
     // Use known protocol fee recipient (skip slow GlobalConfig RPC read)
     let protocol_fee_recipient = pubkey(DEFAULT_PROTOCOL_FEE_RECIPIENT);
 
-    // Read vault balances to calculate min_base_amount_out
-    let min_base_amount_out = match rpc::read_vault_balances(
-        &http,
-        rpc_url,
-        &base_vault_pk,
-        &quote_vault_pk,
-    )
-    .await
-    {
+    // PARALLEL: Read vault balances AND get blockhash simultaneously
+    let (vault_result, blockhash_result) = tokio::join!(
+        rpc::read_vault_balances(http, rpc_url, &base_vault_pk, &quote_vault_pk),
+        rpc::get_latest_blockhash(http, rpc_url)
+    );
+
+    let blockhash = blockhash_result?;
+
+    let min_base_amount_out = match vault_result {
         Ok((base_reserve, quote_reserve)) if base_reserve > 0 && quote_reserve > 0 => {
-            // Constant product: expected_out = base_reserve * lamports / (quote_reserve + lamports)
             let expected =
                 (base_reserve as u128 * lamports as u128) / (quote_reserve as u128 + lamports as u128);
             let slippage_factor = (100.0 - slippage_pct) / 100.0;
             (expected as f64 * slippage_factor) as u64
         }
-        _ => 1u64, // If we can't read vaults, set min to 1 (accept any amount)
+        _ => 1u64,
     };
 
     // Build swap instruction
@@ -136,22 +123,13 @@ pub async fn buy(
     let instructions = vec![
         instruction::set_compute_unit_limit(DEFAULT_CU_LIMIT),
         instruction::set_compute_unit_price(priority),
-        // Create WSOL ATA (idempotent)
         instruction::create_ata_idempotent(&payer, &payer, &quote_mint_pk, &spl_token_program),
-        // Transfer SOL to WSOL ATA
         instruction::transfer_sol(&payer, &user_quote_ata, lamports),
-        // SyncNative to wrap SOL
         instruction::sync_native(&user_quote_ata, &spl_token_program),
-        // Create base token ATA (idempotent) — use Token-2022 for pump.fun tokens
         instruction::create_ata_idempotent(&payer, &payer, &base_mint_pk, &pubkey(TOKEN_2022_PROGRAM)),
-        // PumpSwap swap
         swap_ix,
-        // Close WSOL ATA to unwrap remaining SOL
         instruction::close_account(&user_quote_ata, &payer, &payer, &spl_token_program),
     ];
-
-    // Get recent blockhash and sign
-    let blockhash = rpc::get_latest_blockhash(&http, rpc_url).await?;
 
     let tx = Transaction::new_signed_with_payer(
         &instructions,
@@ -161,10 +139,10 @@ pub async fn buy(
     );
 
     let versioned = solana_sdk::transaction::VersionedTransaction::from(tx);
-    let signature = rpc::send_transaction(&http, rpc_url, &versioned).await?;
+    let signature = rpc::send_transaction(http, rpc_url, &versioned).await?;
 
     // Try to confirm (non-blocking failure -- tx may still land)
-    let confirmed = rpc::confirm_transaction(&http, rpc_url, &signature, 30)
+    let confirmed = rpc::confirm_transaction(http, rpc_url, &signature, 30)
         .await
         .is_ok();
 
@@ -175,22 +153,9 @@ pub async fn buy(
 }
 
 /// Sell tokens on a PumpSwap AMM pool.
-///
-/// Sells base tokens for WSOL, then unwraps WSOL to SOL.
-///
-/// # Arguments
-/// * `rpc_url` - Solana RPC endpoint
-/// * `pool_address` - PumpSwap pool account address
-/// * `base_vault` - Pool's base token vault address
-/// * `quote_vault` - Pool's quote (SOL) vault address
-/// * `coin_creator` - Token creator address (for fee routing)
-/// * `token_amount` - Raw token amount to sell (with decimals, e.g. 1_000_000 = 1 token for 6-decimal)
-/// * `slippage_pct` - Slippage tolerance as percentage
-/// * `keypair` - Wallet keypair for signing
-/// * `base_mint` - Token mint address
-/// * `cu_price` - Compute unit price (priority fee, None for default)
 #[allow(clippy::too_many_arguments)]
 pub async fn sell(
+    http: &reqwest::Client,
     rpc_url: &str,
     pool_address: &str,
     base_vault: &str,
@@ -202,7 +167,6 @@ pub async fn sell(
     base_mint: &str,
     cu_price: Option<u64>,
 ) -> Result<SwapResult, SwapError> {
-    let http = reqwest::Client::new();
     let payer = keypair.pubkey();
 
     if token_amount == 0 {
@@ -222,7 +186,7 @@ pub async fn sell(
     let system_program = pubkey(SYSTEM_PROGRAM);
     let global_config = pubkey(PUMPSWAP_GLOBAL_CONFIG);
 
-    // Derive ATAs — base token uses Token-2022 for pump.fun tokens
+    // Derive ATAs
     let token_2022 = pubkey(TOKEN_2022_PROGRAM);
     let user_base_ata = instruction::derive_ata(&payer, &base_mint_pk, &token_2022);
     let user_quote_ata = instruction::derive_ata(&payer, &quote_mint_pk, &spl_token_program);
@@ -233,29 +197,24 @@ pub async fn sell(
         instruction::derive_ata(&creator_vault_authority, &quote_mint_pk, &spl_token_program);
     let event_authority = instruction::derive_event_authority();
 
-    // Read protocol fee recipient
-    let protocol_fee_recipient =
-        rpc::read_protocol_fee_recipient(&http, rpc_url, &global_config)
-            .await
-            .unwrap_or_else(|_| pubkey(DEFAULT_PROTOCOL_FEE_RECIPIENT));
+    // PARALLEL: Read protocol fee, vault balances, and blockhash simultaneously
+    let (fee_result, vault_result, blockhash_result) = tokio::join!(
+        rpc::read_protocol_fee_recipient(http, rpc_url, &global_config),
+        rpc::read_vault_balances(http, rpc_url, &base_vault_pk, &quote_vault_pk),
+        rpc::get_latest_blockhash(http, rpc_url)
+    );
 
-    // Calculate min_quote_amount_out from vault balances
-    let min_quote_amount_out = match rpc::read_vault_balances(
-        &http,
-        rpc_url,
-        &base_vault_pk,
-        &quote_vault_pk,
-    )
-    .await
-    {
+    let blockhash = blockhash_result?;
+    let protocol_fee_recipient = fee_result.unwrap_or_else(|_| pubkey(DEFAULT_PROTOCOL_FEE_RECIPIENT));
+
+    let min_quote_amount_out = match vault_result {
         Ok((base_reserve, quote_reserve)) if base_reserve > 0 && quote_reserve > 0 => {
-            // Constant product: expected_out = quote_reserve * token_amount / (base_reserve + token_amount)
             let expected = (quote_reserve as u128 * token_amount as u128)
                 / (base_reserve as u128 + token_amount as u128);
             let slippage_factor = (100.0 - slippage_pct) / 100.0;
             (expected as f64 * slippage_factor) as u64
         }
-        _ => 0u64, // If can't read, accept any output
+        _ => 0u64,
     };
 
     // Build sell instruction
@@ -287,15 +246,10 @@ pub async fn sell(
     let instructions = vec![
         instruction::set_compute_unit_limit(DEFAULT_CU_LIMIT),
         instruction::set_compute_unit_price(priority),
-        // Create WSOL ATA to receive SOL (idempotent)
         instruction::create_ata_idempotent(&payer, &payer, &quote_mint_pk, &spl_token_program),
-        // PumpSwap sell
         swap_ix,
-        // Close WSOL ATA to unwrap received SOL
         instruction::close_account(&user_quote_ata, &payer, &payer, &spl_token_program),
     ];
-
-    let blockhash = rpc::get_latest_blockhash(&http, rpc_url).await?;
 
     let tx = Transaction::new_signed_with_payer(
         &instructions,
@@ -305,9 +259,9 @@ pub async fn sell(
     );
 
     let versioned = solana_sdk::transaction::VersionedTransaction::from(tx);
-    let signature = rpc::send_transaction(&http, rpc_url, &versioned).await?;
+    let signature = rpc::send_transaction(http, rpc_url, &versioned).await?;
 
-    let confirmed = rpc::confirm_transaction(&http, rpc_url, &signature, 30)
+    let confirmed = rpc::confirm_transaction(http, rpc_url, &signature, 30)
         .await
         .is_ok();
 
@@ -318,9 +272,9 @@ pub async fn sell(
 }
 
 /// Sell ALL tokens of a given mint from the wallet.
-/// Reads the token balance first, then calls `sell()`.
 #[allow(clippy::too_many_arguments)]
 pub async fn sell_all(
+    http: &reqwest::Client,
     rpc_url: &str,
     pool_address: &str,
     base_vault: &str,
@@ -331,18 +285,18 @@ pub async fn sell_all(
     base_mint: &str,
     cu_price: Option<u64>,
 ) -> Result<SwapResult, SwapError> {
-    let http = reqwest::Client::new();
     let payer = keypair.pubkey();
     let spl_token_program = pubkey(SPL_TOKEN_PROGRAM);
     let base_mint_pk = Pubkey::from_str(base_mint)?;
     let user_ata = instruction::derive_ata(&payer, &base_mint_pk, &spl_token_program);
 
-    let balance = rpc::get_token_balance(&http, rpc_url, &user_ata).await?;
+    let balance = rpc::get_token_balance(http, rpc_url, &user_ata).await?;
     if balance == 0 {
         return Err(SwapError::NoTokenBalance(base_mint.to_string()));
     }
 
     sell(
+        http,
         rpc_url,
         pool_address,
         base_vault,

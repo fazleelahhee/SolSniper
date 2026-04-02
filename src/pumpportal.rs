@@ -5,7 +5,6 @@
 //! discovery (PDAs, fee configs, volume accumulators), we handle the speed.
 
 use solana_sdk::{
-    pubkey::Pubkey,
     signature::Signature,
     signer::{keypair::Keypair, Signer},
 };
@@ -16,6 +15,7 @@ const PUMPPORTAL_API: &str = "https://pumpportal.fun/api/trade-local";
 /// Buy tokens via PumpPortal-built transaction.
 /// PumpPortal builds the tx with correct accounts, we sign and send to our own RPC.
 pub async fn buy(
+    http: &reqwest::Client,
     rpc_url: &str,
     keypair: &Keypair,
     mint: &str,
@@ -23,7 +23,6 @@ pub async fn buy(
     slippage_pct: f64,
     cu_price: Option<u64>,
 ) -> Result<(Signature, u64), SwapError> {
-    let http = reqwest::Client::new();
     let payer = keypair.pubkey();
 
     // Ask PumpPortal to build the tx
@@ -62,13 +61,14 @@ pub async fn buy(
         .map_err(|e| SwapError::Rpc(format!("Failed to sign tx: {}", e)))?;
 
     // Send directly to our RPC (faster than PumpPortal's default RPC)
-    let sig = crate::rpc::send_transaction(&http, rpc_url, &signed).await?;
+    let sig = crate::rpc::send_transaction(http, rpc_url, &signed).await?;
 
     Ok((sig, 0)) // token amount unknown until confirmed
 }
 
 /// Sell tokens via PumpPortal-built transaction.
 pub async fn sell(
+    http: &reqwest::Client,
     rpc_url: &str,
     keypair: &Keypair,
     mint: &str,
@@ -76,7 +76,6 @@ pub async fn sell(
     slippage_pct: f64,
     cu_price: Option<u64>,
 ) -> Result<Signature, SwapError> {
-    let http = reqwest::Client::new();
     let payer = keypair.pubkey();
 
     let body = serde_json::json!({
@@ -112,7 +111,7 @@ pub async fn sell(
     let signed = VersionedTransaction::try_new(tx.message, &[keypair as &dyn solana_sdk::signer::Signer])
         .map_err(|e| SwapError::Rpc(format!("Failed to sign tx: {}", e)))?;
 
-    let sig = crate::rpc::send_transaction(&http, rpc_url, &signed).await?;
+    let sig = crate::rpc::send_transaction(http, rpc_url, &signed).await?;
 
     Ok(sig)
 }
